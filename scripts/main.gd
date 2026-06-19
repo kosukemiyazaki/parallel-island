@@ -10,12 +10,14 @@ const CharacterScript := preload("res://scripts/character.gd")
 
 # 図鑑（設計書 §2）対応。tile=[col,row] は Tiny Dungeon タイルシート上の位置。
 const ROSTER: Array = [
-	{"name": "カエデ", "pattern": "渇望爆発型（つきまとう）", "self_other": 0.5, "impulse": 0.85, "adapt": 0.5, "esteem": 0.2, "empathy": 0.4, "color": Color(0.91, 0.36, 0.36), "tile": [1, 9]},
-	{"name": "ソラ", "pattern": "持続燃焼型（我が道）", "self_other": 0.65, "impulse": 0.85, "adapt": 0.6, "esteem": 0.85, "empathy": 0.4, "color": Color(0.96, 0.73, 0.27), "tile": [4, 7]},
-	{"name": "ナギ", "pattern": "善意搾取型（人に詰める）", "self_other": 0.8, "impulse": 0.5, "adapt": 0.45, "esteem": 0.6, "empathy": 0.85, "color": Color(0.45, 0.78, 0.5), "tile": [0, 7]},
-	{"name": "イオ", "pattern": "不動の人（動かない）", "self_other": 0.5, "impulse": 0.35, "adapt": 0.15, "esteem": 0.85, "empathy": 0.4, "color": Color(0.45, 0.6, 0.9), "tile": [0, 8]},
-	{"name": "ミオ", "pattern": "全部中間（流される）", "self_other": 0.5, "impulse": 0.5, "adapt": 0.5, "esteem": 0.5, "empathy": 0.5, "color": Color(0.72, 0.72, 0.78), "tile": [3, 8]},
+	{"name": "カエデ", "type": "渇望爆発型", "pattern": "渇望爆発型（つきまとう）", "self_other": 0.5, "impulse": 0.85, "adapt": 0.5, "esteem": 0.2, "empathy": 0.4, "color": Color(0.91, 0.36, 0.36), "tile": [1, 9]},
+	{"name": "ソラ", "type": "持続燃焼型", "pattern": "持続燃焼型（我が道）", "self_other": 0.65, "impulse": 0.85, "adapt": 0.6, "esteem": 0.85, "empathy": 0.4, "color": Color(0.96, 0.73, 0.27), "tile": [4, 7]},
+	{"name": "ナギ", "type": "善意搾取型", "pattern": "善意搾取型（人に詰める）", "self_other": 0.8, "impulse": 0.5, "adapt": 0.45, "esteem": 0.6, "empathy": 0.85, "color": Color(0.45, 0.78, 0.5), "tile": [0, 7]},
+	{"name": "イオ", "type": "不動の人", "pattern": "不動の人（動かない）", "self_other": 0.5, "impulse": 0.35, "adapt": 0.15, "esteem": 0.85, "empathy": 0.4, "color": Color(0.45, 0.6, 0.9), "tile": [0, 8]},
+	{"name": "ミオ", "type": "全部中間", "pattern": "全部中間（流される）", "self_other": 0.5, "impulse": 0.5, "adapt": 0.5, "esteem": 0.5, "empathy": 0.5, "color": Color(0.72, 0.72, 0.78), "tile": [3, 8]},
 ]
+
+const PATTERN_TYPES: Array = ["渇望爆発型", "持続燃焼型", "善意搾取型", "不動の人", "全部中間"]
 
 var characters: Array = []
 var places: Array = []
@@ -26,6 +28,16 @@ var ticker: RichTextLabel = null
 var feed: Array = []
 var _flash: Dictionary = {}
 var _ui_font = null
+
+# 予測ゲーム
+var predictions: Dictionary = {}   # char -> 予測したtype
+var revealed: Dictionary = {}      # char -> 開封済みか
+var hit: Dictionary = {}           # char -> 的中したか
+var true_type: Dictionary = {}     # char -> 正解type
+var pred_btns: Array = []
+var reveal_btn: Button = null
+var predict_title: Label = null
+var dex_label: Label = null
 
 var _sheet = null
 var _floor_a = null
@@ -103,6 +115,7 @@ func _spawn_characters() -> void:
 		c.bounds = Rect2(56, 56, 688, 592)
 		c.sprite_tex = _atlas(d["tile"][0], d["tile"][1])
 		c.world = self
+		true_type[c] = d["type"]
 		characters.append(c)
 		i += 1
 	for c in characters:
@@ -158,7 +171,7 @@ func _build_ui() -> void:
 	log_label.bbcode_enabled = true
 	log_label.scroll_following = true
 	log_label.position = Vector2(W - 424, 56)
-	log_label.size = Vector2(404, H - 96)
+	log_label.size = Vector2(404, 388)
 	layer.add_child(log_label)
 	_apply_ui_font(log_label)
 	portrait = TextureRect.new()
@@ -166,6 +179,36 @@ func _build_ui() -> void:
 	portrait.size = Vector2(52, 52)
 	portrait.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	layer.add_child(portrait)
+	# 図鑑
+	dex_label = Label.new()
+	dex_label.position = Vector2(W - 424, 450)
+	dex_label.add_theme_color_override("font_color", Color(1, 0.92, 0.6))
+	layer.add_child(dex_label)
+	_apply_ui_font(dex_label)
+	# 予測UI（タイプ当て）
+	predict_title = Label.new()
+	predict_title.text = "▼ この人はどのタイプ?（観察して予測）"
+	predict_title.position = Vector2(W - 424, 478)
+	layer.add_child(predict_title)
+	_apply_ui_font(predict_title)
+	var bx := [W - 424, W - 216]
+	var by := [506, 544, 582]
+	for ti in range(PATTERN_TYPES.size()):
+		var b := Button.new()
+		b.text = PATTERN_TYPES[ti]
+		b.position = Vector2(bx[ti % 2], by[ti / 2])
+		b.size = Vector2(200, 34)
+		b.pressed.connect(_on_predict.bind(PATTERN_TYPES[ti]))
+		layer.add_child(b)
+		_apply_ui_font(b)
+		pred_btns.append(b)
+	reveal_btn = Button.new()
+	reveal_btn.text = "▶ 答え合わせする"
+	reveal_btn.position = Vector2(W - 424, 506)
+	reveal_btn.size = Vector2(404, 40)
+	reveal_btn.pressed.connect(_on_reveal)
+	layer.add_child(reveal_btn)
+	_apply_ui_font(reveal_btn)
 	# 島の出来事ティッカー（画面下）
 	var tbg := Panel.new()
 	tbg.position = Vector2(8, H - 96)
@@ -300,17 +343,66 @@ func _draw() -> void:
 	if selected != null:
 		draw_arc(selected.position + Vector2(0, 2), 22.0, 0.0, TAU, 28, Color(1.0, 0.95, 0.4, 0.9), 2.5)
 
+func _on_predict(t: String) -> void:
+	if selected == null or bool(revealed.get(selected, false)):
+		return
+	predictions[selected] = t
+	_refresh_log()
+
+func _on_reveal() -> void:
+	if selected == null or not predictions.has(selected) or bool(revealed.get(selected, false)):
+		return
+	revealed[selected] = true
+	hit[selected] = (str(predictions[selected]) == str(true_type.get(selected, "")))
+	report_event("%sの正体が判明：%s" % [selected.char_name, str(true_type.get(selected, "?"))], null, null)
+	_refresh_log()
+
+func _update_predict_ui() -> void:
+	var has := selected != null
+	var predicted := has and predictions.has(selected)
+	var done := has and bool(revealed.get(selected, false))
+	if predict_title != null:
+		predict_title.visible = has and not predicted and not done
+	for b in pred_btns:
+		b.visible = has and not predicted and not done
+	if reveal_btn != null:
+		reveal_btn.visible = predicted and not done
+
+func _update_dex() -> void:
+	if dex_label == null:
+		return
+	var n := 0
+	for c in characters:
+		if bool(revealed.get(c, false)):
+			n += 1
+	var s := "図鑑 %d/%d  " % [n, characters.size()]
+	for c in characters:
+		if bool(revealed.get(c, false)):
+			s += ("◎" if bool(hit.get(c, false)) else "・") + str(true_type.get(c, "?")) + " "
+	dex_label.text = s
+
 func _refresh_log() -> void:
 	if log_label == null:
 		return
+	_update_predict_ui()
+	_update_dex()
 	if portrait != null:
 		portrait.texture = (selected.sprite_tex if selected != null else null)
 	if selected == null:
-		log_label.text = "（キャラをタップすると、その人の関係・行動ログ・自己申告ログが出ます）"
+		log_label.text = "（島民をタップ → 行動と関係を観察して「タイプ」を予測しよう）"
 		return
 	var c = selected
-	var head := "[b]%s[/b]　手がかり: %s\n" % [c.char_name, c.pattern]
-	head += "5軸  自己中心 %.2f / 衝動 %.2f / 適応 %.2f / 自己肯定 %.2f / 共感 %.2f\n" % [c.p_self_other, c.p_impulse, c.p_adapt, c.p_esteem, c.p_empathy]
+	var head := "[b]%s[/b]\n" % c.char_name
+	if bool(revealed.get(c, false)):
+		if bool(hit.get(c, false)):
+			head += "[color=#7cfc7c]正体: %s　◎ 予測的中！[/color]\n" % c.pattern
+		else:
+			head += "[color=#ff9a9a]正体: %s　（予測: %s ／ハズレ）[/color]\n" % [c.pattern, str(predictions.get(c, "?"))]
+		head += "5軸  自己中心 %.2f / 衝動 %.2f / 適応 %.2f / 自己肯定 %.2f / 共感 %.2f\n" % [c.p_self_other, c.p_impulse, c.p_adapt, c.p_esteem, c.p_empathy]
+	elif predictions.has(c):
+		head += "あなたの予測: [b]%s[/b]　観察したら下の「答え合わせ」を押す\n" % str(predictions[c])
+	else:
+		head += "（行動・関係・出来事を見て、タイプを当てよう）\n"
 	var gap_o = null
 	var gap_v: float = 0.3
 	for o in c.others:
