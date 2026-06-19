@@ -24,6 +24,8 @@ var _event_active: bool = false
 var _event_pos: Vector2 = Vector2.ZERO
 var _event_timer: float = 0.0
 var _t: float = 0.0
+var _probe: bool = OS.has_environment("PI_PROBE")  # ヘッドレス検証用（本番は無効）
+var _probe_t: float = 0.0
 
 func _ready() -> void:
 	_apply_font()
@@ -69,7 +71,7 @@ func _build_ui() -> void:
 	title.position = Vector2(16, 8)
 	layer.add_child(title)
 	var hint := Label.new()
-	hint.text = "下のボタン: 島に“出来事”を起こす  /  キャラをタップ: ログを見る"
+	hint.text = "下のボタン: 島に“出来事”を起こす  /  キャラをタップ: ログと関係を見る"
 	hint.position = Vector2(16, 30)
 	hint.modulate = Color(1, 1, 1, 0.7)
 	layer.add_child(hint)
@@ -93,6 +95,11 @@ func _build_ui() -> void:
 
 func _process(delta: float) -> void:
 	_t += delta
+	if _probe:
+		_probe_t += delta
+		if _probe_t >= 8.0:
+			_probe_t = 0.0
+			_dump_relationships()
 	if _event_active:
 		_event_timer -= delta
 		if _event_timer <= 0.0:
@@ -111,6 +118,15 @@ func _trigger_event() -> void:
 	var p := Vector2(randf_range(160, 690), randf_range(190, 560))
 	_event_timer = 7.0
 	_set_event(true, p)
+
+func _dump_relationships() -> void:
+	for c in characters:
+		var inc: float = c.incoming_affinity()
+		var parts := ""
+		for o in c.others:
+			parts += "%s=%+.2f " % [o.char_name, float(c.rel.get(o, 0.0))]
+		print("PROBE %s inc=%+.2f | %s" % [c.char_name, inc, parts])
+	print("PROBE ----")
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_SPACE:
@@ -133,10 +149,16 @@ func _draw() -> void:
 	# 島のランドマーク（場所）
 	for pl in places:
 		draw_rect(Rect2(pl - Vector2(7, 7), Vector2(14, 14)), Color(1, 1, 1, 0.18), false, 2.0)
-	# 関係線：誰が誰に向かっている / 誰から離れているか
-	for c in characters:
-		if c.is_relating() and c.target_char != null:
-			draw_line(c.position, c.target_char.position, Color(1, 1, 1, 0.12), 1.0)
+	# 関係線：好意=暖色 / 嫌悪=寒色、強さ=太さ・濃さ。時間とともに変化する。
+	for i in range(characters.size()):
+		for j in range(i + 1, characters.size()):
+			var a = characters[i]
+			var b = characters[j]
+			var avg: float = (float(a.rel.get(b, 0.0)) + float(b.rel.get(a, 0.0))) * 0.5
+			var mag: float = absf(avg)
+			if mag > 0.22:
+				var col := (Color(1.0, 0.6, 0.3, 0.25 + mag * 0.5) if avg > 0.0 else Color(0.4, 0.7, 1.0, 0.25 + mag * 0.5))
+				draw_line(a.position, b.position, col, 1.0 + mag * 3.0)
 	# 出来事（脈打つリング）
 	if _event_active:
 		var r: float = 18.0 + sin(_t * 4.0) * 6.0
@@ -147,11 +169,21 @@ func _refresh_log() -> void:
 	if log_label == null:
 		return
 	if selected == null:
-		log_label.text = "（キャラをクリックすると、その人の［行動ログ］と［自己申告ログ］が出ます）"
+		log_label.text = "（キャラをタップすると、その人の関係・行動ログ・自己申告ログが出ます）"
 		return
 	var c = selected
 	var head := "[b]%s[/b]　手がかり: %s\n" % [c.char_name, c.pattern]
-	head += "5軸  自己中心 %.2f / 衝動 %.2f / 適応 %.2f / 自己肯定 %.2f / 共感 %.2f\n\n" % [c.p_self_other, c.p_impulse, c.p_adapt, c.p_esteem, c.p_empathy]
+	head += "5軸  自己中心 %.2f / 衝動 %.2f / 適応 %.2f / 自己肯定 %.2f / 共感 %.2f\n" % [c.p_self_other, c.p_impulse, c.p_adapt, c.p_esteem, c.p_empathy]
+	var rels := ""
+	for o in c.others:
+		var v: float = float(c.rel.get(o, 0.0))
+		if absf(v) > 0.15:
+			var mark := "♥" if v > 0.0 else "✕"
+			var cc := "#e0884a" if v > 0.0 else "#5aa0e0"
+			rels += "[color=%s]%s%s%+.2f[/color]　" % [cc, o.char_name, mark, v]
+	if rels == "":
+		rels = "（まだ関係は薄い）"
+	head += "関係: " + rels + "\n\n"
 	var body := ""
 	for line in c.logs:
 		if line.begins_with("［自己申告］"):
