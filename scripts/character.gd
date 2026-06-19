@@ -1,9 +1,7 @@
 extends Node2D
 
-# 行動の「型」。状態が動き方として画面に出る。
 enum State { STAY, GO_PLACE, APPROACH, RETREAT, ATTEND }
 
-# 5軸パラメータ（0.0〜1.0）。クリックでログ枠に開示。
 var p_self_other: float = 0.5   # 高=自分優先 / 低=他者寄り
 var p_impulse: float = 0.5      # 高=即動く・速い / 低=間がある
 var p_adapt: float = 0.5        # 高=新しい場所へ / 低=いつもの場所に固執
@@ -23,14 +21,18 @@ var state: int = State.STAY
 var target_pos: Vector2 = Vector2.ZERO
 var target_char = null
 
-# 関係性レイヤー：相手(Character)ごとの好意(-1.0=嫌悪 .. +1.0=好意)。接触で増減し蓄積する。
+# 関係性レイヤー：相手ごとの好意(-1..1)。接触で増減し蓄積。
 var rel: Dictionary = {}
-var _rel_band: Dictionary = {}   # 相手 -> 直近ログ済みの帯("like"/"dislike"/"")
+var _rel_band: Dictionary = {}
+var _act_counts: Dictionary = {}   # 行動の選択回数（検証用）
 
 var _decide_timer: float = 0.0
 var _event_active: bool = false
 var _event_pos: Vector2 = Vector2.ZERO
 var logs: Array[String] = []
+
+var _t: float = 0.0
+var _phase: float = 0.0
 
 const RADIUS: float = 13.0
 const SOCIAL_DIST: float = 80.0
@@ -48,6 +50,7 @@ func setup(params: Dictionary, pos: Vector2, place_list: Array) -> void:
 	home = pos
 	target_pos = pos
 	places = place_list
+	_phase = randf() * TAU
 	var lbl := Label.new()
 	lbl.text = char_name
 	lbl.position = Vector2(-RADIUS, -RADIUS - 20.0)
@@ -66,7 +69,6 @@ func is_relating() -> bool:
 func affinity_to(o) -> float:
 	return rel.get(o, 0.0)
 
-# 周りから自分への好意の平均（社会的立ち位置）
 func incoming_affinity() -> float:
 	if others.size() == 0:
 		return 0.0
@@ -76,6 +78,7 @@ func incoming_affinity() -> float:
 	return s / float(others.size())
 
 func _process(delta: float) -> void:
+	_t += delta
 	_decide_timer -= delta
 	if _decide_timer <= 0.0:
 		_decide()
@@ -98,17 +101,13 @@ func _update_relationships(delta: float) -> void:
 		if d < SOCIAL_DIST:
 			var crowded: bool = (o.state == State.APPROACH and o.target_char == self and o.p_self_other >= 0.6)
 			if crowded:
-				# 詰められると好意が下がる。自己肯定が低いほど効く。
 				cur -= 0.12 * delta * (1.2 - p_esteem)
 			elif target_char == o:
-				# 自分から寄っていく相手とは親しくなる（＝関係は"意図"から育つ）。
 				cur += 0.09 * delta
 			else:
-				# 通りすがりの同席はわずか。自分本位／自信家ほど影響を受けにくい（孤高が出る）。
 				var openness: float = clampf((1.0 - p_self_other) * 0.6 + (1.0 - p_esteem) * 0.3, 0.0, 1.0)
 				cur += 0.02 * delta * openness
 		else:
-			# 離れていると非常にゆっくり中立へ戻る（≒関係は基本持続する）。
 			cur = move_toward(cur, 0.0, 0.004 * delta)
 		cur = clampf(cur, -1.0, 1.0)
 		rel[o] = cur
@@ -128,83 +127,153 @@ func _check_rel_log(o, v: float) -> void:
 		elif band == "dislike":
 			_log_action("%sは%sを避けるようになってきた" % [char_name, o.char_name])
 
+# ---- 行動選択：重み付き抽選（性格が支配的だが時々ぶれる） ----
 func _decide() -> void:
-	# 0) 押しの強い相手が近い → 距離を取る（柔軟な人だけ。不動の人は耐える）
+	# A) 押しの強い相手が至近 → 退避（確定）
 	for o in others:
 		if o.target_char == self and o.p_self_other >= 0.7 and p_adapt >= 0.3 and position.distance_to(o.position) < 46.0:
+			_count("retreat")
 			state = State.RETREAT
 			target_char = null
 			var away: Vector2 = (position - o.position).normalized()
 			target_pos = position + away * 140.0
 			_log_action("%sはそっと距離を取った" % char_name)
 			return
-	# 0.5) 蓄積した嫌悪：嫌いな相手が近いと、それとなく離れる
+	# B) 蓄積した嫌悪が近い → 離れる（確定）
 	if p_adapt >= 0.3:
 		var hated = _disliked_near(78.0)
 		if hated != null:
+			_count("retreat")
 			state = State.RETREAT
 			target_char = null
 			var away2: Vector2 = (position - hated.position).normalized()
 			target_pos = position + away2 * 130.0
 			_log_action("%sは%sからそれとなく離れた" % [char_name, hated.char_name])
 			return
-	# 1) 島に「出来事」がある → 性格で反応が割れる
+	# C) 出来事 → 性格で反応が割れる
 	if _event_active:
-		var attend: float = _attend_probability()
-		if randf() < attend:
+		if randf() < _attend_probability():
+			_count("attend")
 			state = State.ATTEND
 			target_pos = _event_pos + Vector2(randf_range(-24, 24), randf_range(-24, 24))
 			_log_action("%sは“何か”の方へ向かった" % char_name)
 			return
 		elif p_adapt < 0.3:
+			_count("stay")
 			state = State.STAY
 			_log_action("%sはそちらを見たが、動かなかった" % char_name)
 			return
-	# 2) 変化に乏しい人（低適応）→ いつもの場所にとどまる＝「不動」
-	if p_adapt < 0.3:
-		if position.distance_to(home) > 28.0:
-			state = State.GO_PLACE
-			target_pos = home
-			_log_action("%sはいつもの場所へ戻ろうとした" % char_name)
-		else:
-			state = State.STAY
-			_log_action("%sはその場にとどまっている" % char_name)
-		return
-	# 3) 押しが強く思い込みが強い人 → 近くの誰かに詰める（相手は離れていく）
-	if p_self_other > 0.7 and p_empathy > 0.7 and others.size() > 0:
-		target_char = _nearest_other()
-		state = State.APPROACH
-		target_pos = target_char.position
-		if randf() < 0.3:
-			_log_claim("%sは「力になれると思う」と言った" % char_name)
-		else:
-			_log_action("%sは%sの方へ寄っていった" % [char_name, target_char.char_name])
-		return
-	# 4) 自己肯定感が低い人 → 好きな相手（いなければ近くの相手）に寄る
-	if p_esteem < 0.4 and others.size() > 0:
-		target_char = _most_liked_or_nearest()
-		state = State.APPROACH
-		target_pos = target_char.position
-		_log_action("%sは%sの様子をうかがいに近づいた" % [char_name, target_char.char_name])
-		return
-	# 5) 自分本位な人 → 自分の用で場所を巡る＝「我が道」
-	if p_self_other > 0.6:
-		target_char = null
+	# D) 重み付き抽選
+	var w := {}
+	w["stay"] = clampf((1.0 - p_impulse) * 0.6 + (1.0 - p_adapt) * 1.5, 0.04, 6.0)
+	w["wander"] = clampf(p_self_other * 1.1 + p_impulse * 0.5, 0.04, 6.0)
+	w["approach"] = clampf((1.0 - p_esteem) * 1.8 + _best_liked_value() * 0.6, 0.0, 6.0)
+	w["crowd"] = (2.6 if (p_self_other > 0.7 and p_empathy > 0.7) else 0.0)
+	w["follow"] = clampf((_midness() - 0.4) * 2.6, 0.0, 6.0)
+	if others.size() == 0:
+		w["approach"] = 0.0
+		w["crowd"] = 0.0
+		w["follow"] = 0.0
+	var pick := _weighted_pick(w)
+	_count(pick)
+	match pick:
+		"stay":
+			_do_stay()
+		"wander":
+			_do_wander()
+		"approach":
+			_do_approach(false)
+		"crowd":
+			_do_approach(true)
+		"follow":
+			_do_follow()
+		_:
+			_do_stay()
+	_maybe_self_claim()
+
+func _do_stay() -> void:
+	target_char = null
+	if position.distance_to(home) > 28.0:
 		state = State.GO_PLACE
-		target_pos = _random_place()
-		_log_action("%sは自分の用のために歩き出した" % char_name)
+		target_pos = home
+		_log_action("%sはいつもの場所へ戻ろうとした" % char_name)
+	else:
+		state = State.STAY
+		_log_action("%sはその場にとどまっている" % char_name)
+
+func _do_wander() -> void:
+	target_char = null
+	state = State.GO_PLACE
+	target_pos = _random_place()
+	_log_action("%sは自分の用のために歩き出した" % char_name)
+	if p_impulse < 0.35 and randf() < 0.4:
+		_log_action("%sは一歩踏み出す前に少し止まった" % char_name)
+
+func _do_approach(pushy: bool) -> void:
+	if others.size() == 0:
+		_do_wander()
 		return
-	# 6) 中間の人 → 好きな人が多い方へ流される
+	target_char = _nearest_other() if pushy else _most_liked_or_nearest()
+	state = State.APPROACH
+	target_pos = target_char.position
+	if pushy:
+		_log_action("%sは%sの方へ寄っていった" % [char_name, target_char.char_name])
+	else:
+		_log_action("%sは%sの様子をうかがいに近づいた" % [char_name, target_char.char_name])
+
+func _do_follow() -> void:
 	target_char = null
 	state = State.GO_PLACE
 	target_pos = _liked_center()
 	_log_action("%sは人の集まる方へ流れた" % char_name)
-	if p_impulse < 0.35 and randf() < 0.5:
-		_log_action("%sは一歩踏み出す前に少し止まった" % char_name)
 
+# ---- 自己申告：現実とズレる（記憶の歪み・思い込みの種） ----
+func _maybe_self_claim() -> void:
+	if randf() > 0.22:
+		return
+	# 善意搾取の自己欺瞞：周りから避けられているのに「うまくやれている」
+	if p_empathy > 0.6 and incoming_affinity() < -0.05:
+		_log_claim("%sは「みんなとうまくやれている」と言った" % char_name)
+		return
+	# 一方通行：好きな相手に好かれていないのに「分かり合えている」
+	var liked = _most_liked_or_nearest()
+	if liked != null and float(rel.get(liked, 0.0)) > 0.3 and float(liked.rel.get(self, 0.0)) < 0.1 and p_empathy > 0.5:
+		_log_claim("%sは「%sとは分かり合えている」と言った" % [char_name, liked.char_name])
+		return
+	# 自己像のズレ
+	if randf() < 0.4:
+		_log_claim("%sは自分を中間くらいの人間だと言った" % char_name)
+
+# ---- ヘルパー ----
 func _attend_probability() -> float:
 	var v: float = p_impulse * 0.7 + p_empathy * 0.2 - (1.0 - p_adapt) * 0.3
 	return clampf(v, 0.0, 0.95)
+
+func _weighted_pick(w: Dictionary) -> String:
+	var total: float = 0.0
+	for k in w:
+		total += float(w[k])
+	if total <= 0.0:
+		return "stay"
+	var r: float = randf() * total
+	for k in w:
+		r -= float(w[k])
+		if r <= 0.0:
+			return k
+	return "stay"
+
+func _midness() -> float:
+	var s: float = absf(p_self_other - 0.5) + absf(p_impulse - 0.5) + absf(p_adapt - 0.5) + absf(p_esteem - 0.5) + absf(p_empathy - 0.5)
+	return clampf(1.0 - (s / 5.0) * 2.0, 0.0, 1.0)
+
+func _best_liked_value() -> float:
+	var best: float = 0.0
+	for o in others:
+		best = maxf(best, float(rel.get(o, 0.0)))
+	return best
+
+func _count(a: String) -> void:
+	_act_counts[a] = int(_act_counts.get(a, 0)) + 1
 
 func _nearest_other():
 	var best = null
@@ -245,9 +314,9 @@ func _liked_center() -> Vector2:
 	var sum := Vector2.ZERO
 	var wsum: float = 0.0
 	for o in others:
-		var w: float = 1.0 + maxf(0.0, float(rel.get(o, 0.0)))
-		sum += o.position * w
-		wsum += w
+		var ww: float = 1.0 + maxf(0.0, float(rel.get(o, 0.0)))
+		sum += o.position * ww
+		wsum += ww
 	if wsum <= 0.0:
 		return home
 	return sum / wsum
@@ -267,11 +336,11 @@ func _clamp_bounds() -> void:
 	position.y = clamp(position.y, bounds.position.y, bounds.position.y + bounds.size.y)
 
 func _log_action(s: String) -> void:
-	logs.append("［行動］" + s)
+	logs.append("[t+%ds] ［行動］%s" % [int(_t), s])
 	_trim()
 
 func _log_claim(s: String) -> void:
-	logs.append("［自己申告］" + s)
+	logs.append("[t+%ds] ［自己申告］%s" % [int(_t), s])
 	_trim()
 
 func _trim() -> void:
@@ -279,16 +348,36 @@ func _trim() -> void:
 		logs = logs.slice(logs.size() - 80)
 
 func _draw() -> void:
+	# 生きている揺れ：呼吸スケール＋（衝動が高いほど）小刻みなジッター
+	var breath_speed: float = 2.0 + p_impulse * 5.0
+	var breath_amp: float = 0.05 + p_impulse * 0.05
+	var sc: float = 1.0 + sin(_t * breath_speed + _phase) * breath_amp
+	var c0 := Vector2.ZERO
+	if p_impulse > 0.45:
+		c0 = Vector2(sin(_t * 9.0 + _phase), cos(_t * 11.0 + _phase)) * (p_impulse * 1.3)
 	# 社会的立ち位置：周りからの好意/嫌悪を外周リングで（暖=好かれ / 寒=避けられ）
 	var inc: float = incoming_affinity()
 	if absf(inc) > 0.15:
 		var a: float = clampf(absf(inc), 0.0, 1.0) * 0.85
 		var rc := (Color(1.0, 0.6, 0.3, a) if inc > 0.0 else Color(0.4, 0.7, 1.0, a))
-		draw_arc(Vector2.ZERO, RADIUS + 6.0, 0.0, TAU, 28, rc, 3.0)
-	draw_circle(Vector2.ZERO, RADIUS, color)
+		draw_arc(c0, RADIUS + 6.0, 0.0, TAU, 28, rc, 3.0)
+	draw_circle(c0, RADIUS * sc, color)
 	if state == State.STAY:
-		draw_arc(Vector2.ZERO, RADIUS + 3.0, 0.0, TAU, 24, Color(1, 1, 1, 0.45), 2.0)
+		draw_arc(c0, RADIUS + 3.0, 0.0, TAU, 24, Color(1, 1, 1, 0.4), 2.0)
+		# 視線：止まっている間も周りを気にする。自己肯定が低いほど他者へ向く。
+		var gdir := _idle_gaze()
+		draw_line(c0, c0 + gdir * (RADIUS + 7.0), Color(1, 1, 1, 0.3), 1.5)
 	else:
 		var dir := target_pos - position
 		if dir.length() > 1.0:
-			draw_line(Vector2.ZERO, dir.normalized() * (RADIUS + 9.0), Color(1, 1, 1, 0.6), 2.0)
+			draw_line(c0, c0 + dir.normalized() * (RADIUS + 9.0), Color(1, 1, 1, 0.6), 2.0)
+
+func _idle_gaze() -> Vector2:
+	if p_esteem < 0.45 and others.size() > 0:
+		var n = _nearest_other()
+		if n != null:
+			var toward: Vector2 = n.position - position
+			var ang: float = toward.angle() + sin(_t * 1.6 + _phase) * 0.7
+			return Vector2(cos(ang), sin(ang))
+	var ang2: float = _phase + _t * 0.3
+	return Vector2(cos(ang2), sin(ang2))

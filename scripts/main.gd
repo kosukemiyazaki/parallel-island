@@ -147,7 +147,7 @@ func _dump_relationships() -> void:
 		var parts := ""
 		for o in c.others:
 			parts += "%s=%+.2f " % [o.char_name, float(c.rel.get(o, 0.0))]
-		print("PROBE %s inc=%+.2f | %s" % [c.char_name, inc, parts])
+		print("PROBE %s inc=%+.2f acts=%s | %s" % [c.char_name, inc, str(c._act_counts), parts])
 	print("PROBE ----")
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -208,7 +208,7 @@ func _refresh_log() -> void:
 	head += "関係: " + rels + "\n\n"
 	var body := ""
 	for line in c.logs:
-		if line.begins_with("［自己申告］"):
+		if line.find("［自己申告］") != -1:
 			body += "[color=#d4af37]" + line + "[/color]\n"
 		else:
 			body += line + "\n"
