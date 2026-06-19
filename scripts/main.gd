@@ -26,9 +26,19 @@ var _event_timer: float = 0.0
 var _t: float = 0.0
 
 func _ready() -> void:
+	_apply_font()
 	_make_places()
 	_spawn_characters()
 	_build_ui()
+
+func _apply_font() -> void:
+	# 日本語フォントを全UIに適用（Web では system font 代替が無く文字化けするため同梱）
+	var jp = load("res://assets/NotoSansJP.ttf")
+	if jp != null:
+		var th := Theme.new()
+		th.default_font = jp
+		th.default_font_size = 16
+		get_window().theme = th
 
 func _make_places() -> void:
 	places = [
@@ -59,10 +69,16 @@ func _build_ui() -> void:
 	title.position = Vector2(16, 8)
 	layer.add_child(title)
 	var hint := Label.new()
-	hint.text = "SPACE: 島に“出来事”を起こす  /  キャラをクリック: ログを見る"
+	hint.text = "下のボタン: 島に“出来事”を起こす  /  キャラをタップ: ログを見る"
 	hint.position = Vector2(16, 30)
 	hint.modulate = Color(1, 1, 1, 0.7)
 	layer.add_child(hint)
+	var ev_btn := Button.new()
+	ev_btn.text = "出来事を起こす"
+	ev_btn.position = Vector2(16, 54)
+	ev_btn.size = Vector2(170, 40)
+	ev_btn.pressed.connect(_trigger_event)
+	layer.add_child(ev_btn)
 	var panel := Panel.new()
 	panel.position = Vector2(W - 440, 44)
 	panel.size = Vector2(424, H - 72)
@@ -91,11 +107,14 @@ func _set_event(active: bool, pos: Vector2) -> void:
 	for c in characters:
 		c.set_event(active, pos)
 
+func _trigger_event() -> void:
+	var p := Vector2(randf_range(160, 690), randf_range(190, 560))
+	_event_timer = 7.0
+	_set_event(true, p)
+
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_SPACE:
-		var p := Vector2(randf_range(160, 690), randf_range(190, 560))
-		_event_timer = 7.0
-		_set_event(true, p)
+		_trigger_event()
 		return
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		var m := get_global_mouse_position()
@@ -106,7 +125,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			if dist < best:
 				best = dist
 				nearest = c
-		if nearest != null and best < 30.0:
+		if nearest != null and best < 42.0:
 			selected = nearest
 			_refresh_log()
 
