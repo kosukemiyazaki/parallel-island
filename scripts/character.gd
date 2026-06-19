@@ -2,15 +2,16 @@ extends Node2D
 
 enum State { STAY, GO_PLACE, APPROACH, RETREAT, ATTEND }
 
-var p_self_other: float = 0.5   # 高=自分優先 / 低=他者寄り
-var p_impulse: float = 0.5      # 高=即動く・速い / 低=間がある
-var p_adapt: float = 0.5        # 高=新しい場所へ / 低=いつもの場所に固執
-var p_esteem: float = 0.5       # 高=他者に左右されない / 低=確認が多い
-var p_empathy: float = 0.5      # 高=「わかってる」確信（思い込み）
+var p_self_other: float = 0.5
+var p_impulse: float = 0.5
+var p_adapt: float = 0.5
+var p_esteem: float = 0.5
+var p_empathy: float = 0.5
 
 var char_name: String = "?"
 var pattern: String = "?"
 var color: Color = Color.WHITE
+var sprite_tex = null   # AtlasTexture（main がセット）
 
 var others: Array = []
 var places: Array = []
@@ -21,10 +22,9 @@ var state: int = State.STAY
 var target_pos: Vector2 = Vector2.ZERO
 var target_char = null
 
-# 関係性レイヤー：相手ごとの好意(-1..1)。接触で増減し蓄積。
 var rel: Dictionary = {}
 var _rel_band: Dictionary = {}
-var _act_counts: Dictionary = {}   # 行動の選択回数（検証用）
+var _act_counts: Dictionary = {}
 
 var _decide_timer: float = 0.0
 var _event_active: bool = false
@@ -53,7 +53,10 @@ func setup(params: Dictionary, pos: Vector2, place_list: Array) -> void:
 	_phase = randf() * TAU
 	var lbl := Label.new()
 	lbl.text = char_name
-	lbl.position = Vector2(-RADIUS, -RADIUS - 20.0)
+	lbl.position = Vector2(-16, -40)
+	lbl.add_theme_font_size_override("font_size", 13)
+	lbl.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
+	lbl.add_theme_constant_override("outline_size", 4)
 	var jp = load("res://assets/NotoSansJP.ttf")
 	if jp != null:
 		lbl.add_theme_font_override("font", jp)
@@ -127,9 +130,7 @@ func _check_rel_log(o, v: float) -> void:
 		elif band == "dislike":
 			_log_action("%sは%sを避けるようになってきた" % [char_name, o.char_name])
 
-# ---- 行動選択：重み付き抽選（性格が支配的だが時々ぶれる） ----
 func _decide() -> void:
-	# A) 押しの強い相手が至近 → 退避（確定）
 	for o in others:
 		if o.target_char == self and o.p_self_other >= 0.7 and p_adapt >= 0.3 and position.distance_to(o.position) < 46.0:
 			_count("retreat")
@@ -139,7 +140,6 @@ func _decide() -> void:
 			target_pos = position + away * 140.0
 			_log_action("%sはそっと距離を取った" % char_name)
 			return
-	# B) 蓄積した嫌悪が近い → 離れる（確定）
 	if p_adapt >= 0.3:
 		var hated = _disliked_near(78.0)
 		if hated != null:
@@ -150,7 +150,6 @@ func _decide() -> void:
 			target_pos = position + away2 * 130.0
 			_log_action("%sは%sからそれとなく離れた" % [char_name, hated.char_name])
 			return
-	# C) 出来事 → 性格で反応が割れる
 	if _event_active:
 		if randf() < _attend_probability():
 			_count("attend")
@@ -163,7 +162,6 @@ func _decide() -> void:
 			state = State.STAY
 			_log_action("%sはそちらを見たが、動かなかった" % char_name)
 			return
-	# D) 重み付き抽選
 	var w := {}
 	w["stay"] = clampf((1.0 - p_impulse) * 0.6 + (1.0 - p_adapt) * 1.5, 0.04, 6.0)
 	w["wander"] = clampf(p_self_other * 1.1 + p_impulse * 0.5, 0.04, 6.0)
@@ -227,24 +225,19 @@ func _do_follow() -> void:
 	target_pos = _liked_center()
 	_log_action("%sは人の集まる方へ流れた" % char_name)
 
-# ---- 自己申告：現実とズレる（記憶の歪み・思い込みの種） ----
 func _maybe_self_claim() -> void:
 	if randf() > 0.22:
 		return
-	# 善意搾取の自己欺瞞：周りから避けられているのに「うまくやれている」
 	if p_empathy > 0.6 and incoming_affinity() < -0.05:
 		_log_claim("%sは「みんなとうまくやれている」と言った" % char_name)
 		return
-	# 一方通行：好きな相手に好かれていないのに「分かり合えている」
 	var liked = _most_liked_or_nearest()
 	if liked != null and float(rel.get(liked, 0.0)) > 0.3 and float(liked.rel.get(self, 0.0)) < 0.1 and p_empathy > 0.5:
 		_log_claim("%sは「%sとは分かり合えている」と言った" % [char_name, liked.char_name])
 		return
-	# 自己像のズレ
 	if randf() < 0.4:
 		_log_claim("%sは自分を中間くらいの人間だと言った" % char_name)
 
-# ---- ヘルパー ----
 func _attend_probability() -> float:
 	var v: float = p_impulse * 0.7 + p_empathy * 0.2 - (1.0 - p_adapt) * 0.3
 	return clampf(v, 0.0, 0.95)
@@ -348,36 +341,24 @@ func _trim() -> void:
 		logs = logs.slice(logs.size() - 80)
 
 func _draw() -> void:
-	# 生きている揺れ：呼吸スケール＋（衝動が高いほど）小刻みなジッター
-	var breath_speed: float = 2.0 + p_impulse * 5.0
-	var breath_amp: float = 0.05 + p_impulse * 0.05
-	var sc: float = 1.0 + sin(_t * breath_speed + _phase) * breath_amp
-	var c0 := Vector2.ZERO
+	# 生きている揺れ：上下のバウンド＋（衝動が高いほど）小刻みな横ジッター
+	var bob: float = sin(_t * (2.0 + p_impulse * 4.0) + _phase) * (1.2 + p_impulse * 1.5)
+	var jx: float = 0.0
 	if p_impulse > 0.45:
-		c0 = Vector2(sin(_t * 9.0 + _phase), cos(_t * 11.0 + _phase)) * (p_impulse * 1.3)
-	# 社会的立ち位置：周りからの好意/嫌悪を外周リングで（暖=好かれ / 寒=避けられ）
+		jx = sin(_t * 9.0 + _phase) * p_impulse * 1.2
+	# 影（接地感）
+	draw_circle(Vector2(0, 13), 9.0, Color(0, 0, 0, 0.30))
+	# 社会的立ち位置リング（暖=好かれ / 寒=避けられ）
 	var inc: float = incoming_affinity()
 	if absf(inc) > 0.15:
 		var a: float = clampf(absf(inc), 0.0, 1.0) * 0.85
 		var rc := (Color(1.0, 0.6, 0.3, a) if inc > 0.0 else Color(0.4, 0.7, 1.0, a))
-		draw_arc(c0, RADIUS + 6.0, 0.0, TAU, 28, rc, 3.0)
-	draw_circle(c0, RADIUS * sc, color)
-	if state == State.STAY:
-		draw_arc(c0, RADIUS + 3.0, 0.0, TAU, 24, Color(1, 1, 1, 0.4), 2.0)
-		# 視線：止まっている間も周りを気にする。自己肯定が低いほど他者へ向く。
-		var gdir := _idle_gaze()
-		draw_line(c0, c0 + gdir * (RADIUS + 7.0), Color(1, 1, 1, 0.3), 1.5)
+		draw_arc(Vector2(0, 2), 19.0, 0.0, TAU, 28, rc, 3.0)
+	# 本体スプライト
+	if sprite_tex != null:
+		var sz: float = 34.0
+		draw_texture_rect(sprite_tex, Rect2(-sz / 2.0 + jx, -sz + 14.0 + bob, sz, sz), false)
 	else:
-		var dir := target_pos - position
-		if dir.length() > 1.0:
-			draw_line(c0, c0 + dir.normalized() * (RADIUS + 9.0), Color(1, 1, 1, 0.6), 2.0)
-
-func _idle_gaze() -> Vector2:
-	if p_esteem < 0.45 and others.size() > 0:
-		var n = _nearest_other()
-		if n != null:
-			var toward: Vector2 = n.position - position
-			var ang: float = toward.angle() + sin(_t * 1.6 + _phase) * 0.7
-			return Vector2(cos(ang), sin(ang))
-	var ang2: float = _phase + _t * 0.3
-	return Vector2(cos(ang2), sin(ang2))
+		draw_circle(Vector2.ZERO, RADIUS, color)
+	if state == State.STAY:
+		draw_arc(Vector2(0, 2), 16.0, 0.0, TAU, 20, Color(1, 1, 1, 0.18), 1.5)

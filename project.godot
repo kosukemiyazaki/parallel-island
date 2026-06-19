@@ -21,3 +21,4 @@ pointing/emulate_mouse_from_touch=true
 [rendering]
 
 renderer/rendering_method="gl_compatibility"
+textures/canvas_textures/default_texture_filter=0
