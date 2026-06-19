@@ -21,6 +21,7 @@ var characters: Array = []
 var places: Array = []
 var selected = null
 var log_label: RichTextLabel = null
+var portrait: TextureRect = null
 var _ui_font = null
 
 var _sheet = null
@@ -83,10 +84,10 @@ func _atlas(col: int, row: int):
 
 func _make_places() -> void:
 	places = [
-		Vector2(220, 240),
-		Vector2(620, 230),
-		Vector2(260, 520),
-		Vector2(580, 500),
+		Vector2(140, 150),
+		Vector2(660, 150),
+		Vector2(140, 560),
+		Vector2(660, 560),
 	]
 
 func _spawn_characters() -> void:
@@ -106,6 +107,15 @@ func _spawn_characters() -> void:
 func _build_ui() -> void:
 	var layer := CanvasLayer.new()
 	add_child(layer)
+	# 左上HUDの読みやすさ用の半透明バナー
+	var hud := Panel.new()
+	hud.position = Vector2(6, 4)
+	hud.size = Vector2(474, 102)
+	var hsb := StyleBoxFlat.new()
+	hsb.bg_color = Color(0, 0, 0, 0.45)
+	hsb.set_corner_radius_all(6)
+	hud.add_theme_stylebox_override("panel", hsb)
+	layer.add_child(hud)
 	var panel := Panel.new()
 	panel.position = Vector2(W - 440, 44)
 	panel.size = Vector2(424, H - 72)
@@ -147,6 +157,11 @@ func _build_ui() -> void:
 	log_label.size = Vector2(404, H - 96)
 	layer.add_child(log_label)
 	_apply_ui_font(log_label)
+	portrait = TextureRect.new()
+	portrait.position = Vector2(W - 80, 54)
+	portrait.size = Vector2(52, 52)
+	portrait.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	layer.add_child(portrait)
 	_refresh_log()
 
 func _process(delta: float) -> void:
@@ -244,6 +259,8 @@ func _draw() -> void:
 func _refresh_log() -> void:
 	if log_label == null:
 		return
+	if portrait != null:
+		portrait.texture = (selected.sprite_tex if selected != null else null)
 	if selected == null:
 		log_label.text = "（キャラをタップすると、その人の関係・行動ログ・自己申告ログが出ます）"
 		return

@@ -94,8 +94,16 @@ func _process(delta: float) -> void:
 		elif state == State.APPROACH and target_char != null:
 			target_pos = target_char.position
 	_update_relationships(delta)
+	_separate(delta)
 	_clamp_bounds()
 	queue_redraw()
+
+func _separate(delta: float) -> void:
+	# パーソナルスペース：重なりすぎないよう軽く反発（観察しやすさのため）
+	for o in others:
+		var d := position.distance_to(o.position)
+		if d > 0.5 and d < 26.0:
+			position += (position - o.position).normalized() * (26.0 - d) * 6.0 * delta
 
 func _update_relationships(delta: float) -> void:
 	for o in others:
