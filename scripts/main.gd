@@ -19,6 +19,7 @@ var characters: Array = []
 var places: Array = []
 var selected = null
 var log_label: RichTextLabel = null
+var _ui_font = null
 
 var _event_active: bool = false
 var _event_pos: Vector2 = Vector2.ZERO
@@ -34,13 +35,30 @@ func _ready() -> void:
 	_build_ui()
 
 func _apply_font() -> void:
-	# 日本語フォントを全UIに適用（Web では system font 代替が無く文字化けするため同梱）
-	var jp = load("res://assets/NotoSansJP.ttf")
-	if jp != null:
-		var th := Theme.new()
-		th.default_font = jp
-		th.default_font_size = 16
-		get_window().theme = th
+	# 日本語フォントを同梱（Web では system font 代替が無く文字化けするため）
+	_ui_font = load("res://assets/NotoSansJP.ttf")
+	if _ui_font == null:
+		return
+	# window テーマにも入れておく（保険）
+	var th := Theme.new()
+	th.default_font = _ui_font
+	th.default_font_size = 16
+	var w := get_window()
+	if w != null:
+		w.theme = th
+
+func _apply_ui_font(ctrl: Control) -> void:
+	# テーマ伝播が効かないケースがあるため、各コントロールに直接上書きする（確実）
+	if _ui_font == null:
+		return
+	if ctrl is RichTextLabel:
+		ctrl.add_theme_font_override("normal_font", _ui_font)
+		ctrl.add_theme_font_override("bold_font", _ui_font)
+		ctrl.add_theme_font_override("italics_font", _ui_font)
+		ctrl.add_theme_font_override("bold_italics_font", _ui_font)
+		ctrl.add_theme_font_override("mono_font", _ui_font)
+	else:
+		ctrl.add_theme_font_override("font", _ui_font)
 
 func _make_places() -> void:
 	places = [
@@ -70,17 +88,20 @@ func _build_ui() -> void:
 	title.text = "PARALLEL ISLAND — PHASE 1"
 	title.position = Vector2(16, 8)
 	layer.add_child(title)
+	_apply_ui_font(title)
 	var hint := Label.new()
 	hint.text = "下のボタン: 島に“出来事”を起こす  /  キャラをタップ: ログと関係を見る"
 	hint.position = Vector2(16, 30)
 	hint.modulate = Color(1, 1, 1, 0.7)
 	layer.add_child(hint)
+	_apply_ui_font(hint)
 	var ev_btn := Button.new()
 	ev_btn.text = "出来事を起こす"
 	ev_btn.position = Vector2(16, 54)
 	ev_btn.size = Vector2(170, 40)
 	ev_btn.pressed.connect(_trigger_event)
 	layer.add_child(ev_btn)
+	_apply_ui_font(ev_btn)
 	var panel := Panel.new()
 	panel.position = Vector2(W - 440, 44)
 	panel.size = Vector2(424, H - 72)
@@ -91,6 +112,7 @@ func _build_ui() -> void:
 	log_label.position = Vector2(W - 428, 54)
 	log_label.size = Vector2(400, H - 92)
 	layer.add_child(log_label)
+	_apply_ui_font(log_label)
 	_refresh_log()
 
 func _process(delta: float) -> void:

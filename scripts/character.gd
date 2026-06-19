@@ -51,6 +51,9 @@ func setup(params: Dictionary, pos: Vector2, place_list: Array) -> void:
 	var lbl := Label.new()
 	lbl.text = char_name
 	lbl.position = Vector2(-RADIUS, -RADIUS - 20.0)
+	var jp = load("res://assets/NotoSansJP.ttf")
+	if jp != null:
+		lbl.add_theme_font_override("font", jp)
 	add_child(lbl)
 
 func set_event(active: bool, pos: Vector2) -> void:
@@ -97,9 +100,13 @@ func _update_relationships(delta: float) -> void:
 			if crowded:
 				# 詰められると好意が下がる。自己肯定が低いほど効く。
 				cur -= 0.12 * delta * (1.2 - p_esteem)
+			elif target_char == o:
+				# 自分から寄っていく相手とは親しくなる（＝関係は"意図"から育つ）。
+				cur += 0.09 * delta
 			else:
-				# 穏やかに同席すると少しずつ打ち解ける。
-				cur += 0.06 * delta
+				# 通りすがりの同席はわずか。自分本位／自信家ほど影響を受けにくい（孤高が出る）。
+				var openness: float = clampf((1.0 - p_self_other) * 0.6 + (1.0 - p_esteem) * 0.3, 0.0, 1.0)
+				cur += 0.02 * delta * openness
 		else:
 			# 離れていると非常にゆっくり中立へ戻る（≒関係は基本持続する）。
 			cur = move_toward(cur, 0.0, 0.004 * delta)
