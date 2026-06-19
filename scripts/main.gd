@@ -22,6 +22,9 @@ var places: Array = []
 var selected = null
 var log_label: RichTextLabel = null
 var portrait: TextureRect = null
+var ticker: RichTextLabel = null
+var feed: Array = []
+var _flash: Dictionary = {}
 var _ui_font = null
 
 var _sheet = null
@@ -99,6 +102,7 @@ func _spawn_characters() -> void:
 		c.setup(d, pos, places)
 		c.bounds = Rect2(56, 56, 688, 592)
 		c.sprite_tex = _atlas(d["tile"][0], d["tile"][1])
+		c.world = self
 		characters.append(c)
 		i += 1
 	for c in characters:
@@ -162,10 +166,30 @@ func _build_ui() -> void:
 	portrait.size = Vector2(52, 52)
 	portrait.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	layer.add_child(portrait)
+	# 島の出来事ティッカー（画面下）
+	var tbg := Panel.new()
+	tbg.position = Vector2(8, H - 96)
+	tbg.size = Vector2(816, 84)
+	var tsb := StyleBoxFlat.new()
+	tsb.bg_color = Color(0, 0, 0, 0.42)
+	tsb.set_corner_radius_all(6)
+	tbg.add_theme_stylebox_override("panel", tsb)
+	layer.add_child(tbg)
+	ticker = RichTextLabel.new()
+	ticker.bbcode_enabled = true
+	ticker.position = Vector2(20, H - 90)
+	ticker.size = Vector2(796, 76)
+	layer.add_child(ticker)
+	_apply_ui_font(ticker)
+	_update_ticker()
 	_refresh_log()
 
 func _process(delta: float) -> void:
 	_t += delta
+	for k in _flash.keys():
+		_flash[k] = float(_flash[k]) - delta
+		if float(_flash[k]) <= 0.0:
+			_flash.erase(k)
 	if _probe:
 		_probe_t += delta
 		if _probe_t >= 8.0:
@@ -189,6 +213,24 @@ func _trigger_event() -> void:
 	var p := Vector2(randf_range(120, 680), randf_range(120, 600))
 	_event_timer = 7.0
 	_set_event(true, p)
+
+func report_event(text: String, a, b) -> void:
+	feed.append("[t+%ds] %s" % [int(_t), text])
+	if feed.size() > 8:
+		feed = feed.slice(feed.size() - 8)
+	if a != null and b != null:
+		_flash[str(a.get_instance_id()) + "_" + str(b.get_instance_id())] = 1.0
+		_flash[str(b.get_instance_id()) + "_" + str(a.get_instance_id())] = 1.0
+	_update_ticker()
+
+func _update_ticker() -> void:
+	if ticker == null:
+		return
+	var lines := ""
+	var start: int = maxi(0, feed.size() - 3)
+	for idx in range(start, feed.size()):
+		lines += String(feed[idx]) + "\n"
+	ticker.text = "[b]島の出来事[/b]\n" + lines
 
 func _dump_relationships() -> void:
 	for c in characters:
@@ -245,9 +287,11 @@ func _draw() -> void:
 			var b = characters[j]
 			var avg: float = (float(a.rel.get(b, 0.0)) + float(b.rel.get(a, 0.0))) * 0.5
 			var mag: float = absf(avg)
-			if mag > 0.22:
-				var col := (Color(1.0, 0.62, 0.3, 0.3 + mag * 0.5) if avg > 0.0 else Color(0.45, 0.7, 1.0, 0.3 + mag * 0.5))
-				draw_line(a.position, b.position, col, 1.0 + mag * 3.0)
+			var fl: float = float(_flash.get(str(a.get_instance_id()) + "_" + str(b.get_instance_id()), 0.0))
+			if mag > 0.22 or fl > 0.0:
+				var alpha: float = clampf(0.28 + mag * 0.5 + fl * 0.6, 0.0, 1.0)
+				var col := (Color(1.0, 0.62, 0.3, alpha) if avg >= 0.0 else Color(0.45, 0.7, 1.0, alpha))
+				draw_line(a.position, b.position, col, 1.0 + mag * 3.0 + fl * 4.0)
 	# 出来事
 	if _event_active:
 		var r: float = 18.0 + sin(_t * 4.0) * 6.0
@@ -267,6 +311,16 @@ func _refresh_log() -> void:
 	var c = selected
 	var head := "[b]%s[/b]　手がかり: %s\n" % [c.char_name, c.pattern]
 	head += "5軸  自己中心 %.2f / 衝動 %.2f / 適応 %.2f / 自己肯定 %.2f / 共感 %.2f\n" % [c.p_self_other, c.p_impulse, c.p_adapt, c.p_esteem, c.p_empathy]
+	var gap_o = null
+	var gap_v: float = 0.3
+	for o in c.others:
+		var mine: float = float(c.rel.get(o, 0.0))
+		var theirs: float = float(o.rel.get(c, 0.0))
+		if mine > 0.3 and (mine - theirs) > gap_v:
+			gap_v = mine - theirs
+			gap_o = o
+	if gap_o != null:
+		head += "[color=#ff6b6b]※ズレ: %s は %s を好き(%+.2f) けれど %s は %+.2f（一方通行）[/color]\n" % [c.char_name, gap_o.char_name, float(c.rel.get(gap_o, 0.0)), gap_o.char_name, float(gap_o.rel.get(c, 0.0))]
 	var rels := ""
 	for o in c.others:
 		var v: float = float(c.rel.get(o, 0.0))

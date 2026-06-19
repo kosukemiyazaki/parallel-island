@@ -11,7 +11,8 @@ var p_empathy: float = 0.5
 var char_name: String = "?"
 var pattern: String = "?"
 var color: Color = Color.WHITE
-var sprite_tex = null   # AtlasTexture（main がセット）
+var sprite_tex = null
+var world = null   # main への参照（事件報告用）
 
 var others: Array = []
 var places: Array = []
@@ -33,6 +34,10 @@ var logs: Array[String] = []
 
 var _t: float = 0.0
 var _phase: float = 0.0
+var _font = null
+var _icon: String = ""
+var _icon_t: float = 0.0
+var _icon_col: Color = Color.WHITE
 
 const RADIUS: float = 13.0
 const SOCIAL_DIST: float = 80.0
@@ -51,15 +56,15 @@ func setup(params: Dictionary, pos: Vector2, place_list: Array) -> void:
 	target_pos = pos
 	places = place_list
 	_phase = randf() * TAU
+	_font = load("res://assets/NotoSansJP.ttf")
 	var lbl := Label.new()
 	lbl.text = char_name
-	lbl.position = Vector2(-16, -40)
+	lbl.position = Vector2(-16, -42)
 	lbl.add_theme_font_size_override("font_size", 13)
 	lbl.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
 	lbl.add_theme_constant_override("outline_size", 4)
-	var jp = load("res://assets/NotoSansJP.ttf")
-	if jp != null:
-		lbl.add_theme_font_override("font", jp)
+	if _font != null:
+		lbl.add_theme_font_override("font", _font)
 	add_child(lbl)
 
 func set_event(active: bool, pos: Vector2) -> void:
@@ -80,8 +85,19 @@ func incoming_affinity() -> float:
 		s += float(o.rel.get(self, 0.0))
 	return s / float(others.size())
 
+func _flash_icon(s: String, col: Color) -> void:
+	_icon = s
+	_icon_col = col
+	_icon_t = 1.6
+
+func _report(text: String, o) -> void:
+	if world != null:
+		world.report_event(text, self, o)
+
 func _process(delta: float) -> void:
 	_t += delta
+	if _icon_t > 0.0:
+		_icon_t -= delta
 	_decide_timer -= delta
 	if _decide_timer <= 0.0:
 		_decide()
@@ -99,7 +115,6 @@ func _process(delta: float) -> void:
 	queue_redraw()
 
 func _separate(delta: float) -> void:
-	# パーソナルスペース：重なりすぎないよう軽く反発（観察しやすさのため）
 	for o in others:
 		var d := position.distance_to(o.position)
 		if d > 0.5 and d < 26.0:
@@ -135,10 +150,28 @@ func _check_rel_log(o, v: float) -> void:
 		_rel_band[o] = band
 		if band == "like":
 			_log_action("%sは%sと打ち解けてきた" % [char_name, o.char_name])
+			_flash_icon("♥", Color(1.0, 0.55, 0.5))
+			_report("%sが%sと打ち解けた" % [char_name, o.char_name], o)
 		elif band == "dislike":
 			_log_action("%sは%sを避けるようになってきた" % [char_name, o.char_name])
+			_flash_icon("×", Color(0.5, 0.75, 1.0))
+			_report("%sが%sを避け始めた" % [char_name, o.char_name], o)
 
 func _decide() -> void:
+	# 暗数：普段の関係が突然壊れる（低確率の離反＝設計書の「暗数」）
+	if others.size() > 0 and randf() < 0.0025 + p_impulse * 0.004:
+		var vic = _most_liked_or_nearest()
+		if vic != null and float(rel.get(vic, 0.0)) > 0.2:
+			rel[vic] = -0.7
+			_count("betray")
+			_flash_icon("！", Color(1.0, 0.45, 0.4))
+			_log_action("%sは突然%sへの気持ちが切れた" % [char_name, vic.char_name])
+			_report("%sが突然%sを見限った" % [char_name, vic.char_name], vic)
+			state = State.RETREAT
+			target_char = null
+			var aw: Vector2 = (position - vic.position).normalized()
+			target_pos = position + aw * 130.0
+			return
 	for o in others:
 		if o.target_char == self and o.p_self_other >= 0.7 and p_adapt >= 0.3 and position.distance_to(o.position) < 46.0:
 			_count("retreat")
@@ -146,6 +179,7 @@ func _decide() -> void:
 			target_char = null
 			var away: Vector2 = (position - o.position).normalized()
 			target_pos = position + away * 140.0
+			_flash_icon("…", Color(0.7, 0.8, 1.0))
 			_log_action("%sはそっと距離を取った" % char_name)
 			return
 	if p_adapt >= 0.3:
@@ -156,6 +190,7 @@ func _decide() -> void:
 			target_char = null
 			var away2: Vector2 = (position - hated.position).normalized()
 			target_pos = position + away2 * 130.0
+			_flash_icon("…", Color(0.7, 0.8, 1.0))
 			_log_action("%sは%sからそれとなく離れた" % [char_name, hated.char_name])
 			return
 	if _event_active:
@@ -163,11 +198,13 @@ func _decide() -> void:
 			_count("attend")
 			state = State.ATTEND
 			target_pos = _event_pos + Vector2(randf_range(-24, 24), randf_range(-24, 24))
+			_flash_icon("！", Color(1.0, 0.9, 0.3))
 			_log_action("%sは“何か”の方へ向かった" % char_name)
 			return
 		elif p_adapt < 0.3:
 			_count("stay")
 			state = State.STAY
+			_flash_icon("…", Color(0.85, 0.85, 0.85))
 			_log_action("%sはそちらを見たが、動かなかった" % char_name)
 			return
 	var w := {}
@@ -206,14 +243,14 @@ func _do_stay() -> void:
 	else:
 		state = State.STAY
 		_log_action("%sはその場にとどまっている" % char_name)
+		if p_impulse < 0.4 and randf() < 0.3:
+			_flash_icon("…", Color(0.85, 0.85, 0.85))
 
 func _do_wander() -> void:
 	target_char = null
 	state = State.GO_PLACE
 	target_pos = _random_place()
 	_log_action("%sは自分の用のために歩き出した" % char_name)
-	if p_impulse < 0.35 and randf() < 0.4:
-		_log_action("%sは一歩踏み出す前に少し止まった" % char_name)
 
 func _do_approach(pushy: bool) -> void:
 	if others.size() == 0:
@@ -238,13 +275,16 @@ func _maybe_self_claim() -> void:
 		return
 	if p_empathy > 0.6 and incoming_affinity() < -0.05:
 		_log_claim("%sは「みんなとうまくやれている」と言った" % char_name)
+		_flash_icon("bubble", Color(0.85, 0.7, 0.2))
 		return
 	var liked = _most_liked_or_nearest()
 	if liked != null and float(rel.get(liked, 0.0)) > 0.3 and float(liked.rel.get(self, 0.0)) < 0.1 and p_empathy > 0.5:
 		_log_claim("%sは「%sとは分かり合えている」と言った" % [char_name, liked.char_name])
+		_flash_icon("bubble", Color(0.85, 0.7, 0.2))
 		return
 	if randf() < 0.4:
 		_log_claim("%sは自分を中間くらいの人間だと言った" % char_name)
+		_flash_icon("bubble", Color(0.85, 0.7, 0.2))
 
 func _attend_probability() -> float:
 	var v: float = p_impulse * 0.7 + p_empathy * 0.2 - (1.0 - p_adapt) * 0.3
@@ -349,20 +389,16 @@ func _trim() -> void:
 		logs = logs.slice(logs.size() - 80)
 
 func _draw() -> void:
-	# 生きている揺れ：上下のバウンド＋（衝動が高いほど）小刻みな横ジッター
 	var bob: float = sin(_t * (2.0 + p_impulse * 4.0) + _phase) * (1.2 + p_impulse * 1.5)
 	var jx: float = 0.0
 	if p_impulse > 0.45:
 		jx = sin(_t * 9.0 + _phase) * p_impulse * 1.2
-	# 影（接地感）
 	draw_circle(Vector2(0, 13), 9.0, Color(0, 0, 0, 0.30))
-	# 社会的立ち位置リング（暖=好かれ / 寒=避けられ）
 	var inc: float = incoming_affinity()
 	if absf(inc) > 0.15:
 		var a: float = clampf(absf(inc), 0.0, 1.0) * 0.85
 		var rc := (Color(1.0, 0.6, 0.3, a) if inc > 0.0 else Color(0.4, 0.7, 1.0, a))
 		draw_arc(Vector2(0, 2), 19.0, 0.0, TAU, 28, rc, 3.0)
-	# 本体スプライト
 	if sprite_tex != null:
 		var sz: float = 34.0
 		draw_texture_rect(sprite_tex, Rect2(-sz / 2.0 + jx, -sz + 14.0 + bob, sz, sz), false)
@@ -370,3 +406,13 @@ func _draw() -> void:
 		draw_circle(Vector2.ZERO, RADIUS, color)
 	if state == State.STAY:
 		draw_arc(Vector2(0, 2), 16.0, 0.0, TAU, 20, Color(1, 1, 1, 0.18), 1.5)
+	# 兆候アイコン（内面の漏れ：説明ではなく兆候）
+	if _icon_t > 0.0:
+		var ia: float = clampf(_icon_t / 0.7, 0.0, 1.0)
+		var iy: float = -34.0 + bob - (1.0 - ia) * 6.0
+		if _icon == "bubble":
+			var bc := Color(0.9, 0.78, 0.25, ia)
+			draw_rect(Rect2(-9, iy - 9, 18, 12), bc, true)
+			draw_rect(Rect2(-2, iy + 3, 5, 4), bc, true)
+		elif _font != null and _icon != "":
+			draw_string(_font, Vector2(-12, iy), _icon, HORIZONTAL_ALIGNMENT_CENTER, 24, 22, Color(_icon_col.r, _icon_col.g, _icon_col.b, ia))
