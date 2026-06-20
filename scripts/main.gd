@@ -38,6 +38,8 @@ var pred_btns: Array = []
 var reveal_btn: Button = null
 var predict_title: Label = null
 var dex_label: Label = null
+var intro: Panel = null
+var complete_label: Label = null
 
 var _sheet = null
 var _floor_a = null
@@ -153,7 +155,7 @@ func _build_ui() -> void:
 	layer.add_child(title)
 	_apply_ui_font(title)
 	var hint := Label.new()
-	hint.text = "ボタン: 島に“出来事”を起こす  /  キャラをタップ: ログと関係"
+	hint.text = "島民をタップ→観察→タイプを予測→答え合わせ ／ ボタン: 出来事を起こす"
 	hint.position = Vector2(18, 34)
 	hint.modulate = Color(1, 1, 1, 0.85)
 	hint.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
@@ -224,6 +226,58 @@ func _build_ui() -> void:
 	ticker.size = Vector2(796, 76)
 	layer.add_child(ticker)
 	_apply_ui_font(ticker)
+	# 図鑑コンプリート演出
+	complete_label = Label.new()
+	complete_label.text = "★ 図鑑コンプリート！全員のタイプを見抜いた"
+	complete_label.position = Vector2(0, 120)
+	complete_label.size = Vector2(824, 30)
+	complete_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	complete_label.add_theme_font_size_override("font_size", 22)
+	complete_label.add_theme_color_override("font_color", Color(1, 0.9, 0.4))
+	complete_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
+	complete_label.add_theme_constant_override("outline_size", 5)
+	complete_label.visible = false
+	layer.add_child(complete_label)
+	_apply_ui_font(complete_label)
+	# 導入オーバーレイ（初見で何のゲームか分かるように）
+	intro = Panel.new()
+	intro.size = Vector2(W, H)
+	var isb := StyleBoxFlat.new()
+	isb.bg_color = Color(0.04, 0.05, 0.09, 0.93)
+	intro.add_theme_stylebox_override("panel", isb)
+	layer.add_child(intro)
+	var it := Label.new()
+	it.text = "PARALLEL ISLAND"
+	it.add_theme_font_size_override("font_size", 52)
+	it.position = Vector2(0, 150)
+	it.size = Vector2(W, 70)
+	it.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	intro.add_child(it)
+	_apply_ui_font(it)
+	var ig := Label.new()
+	ig.text = "島に放たれた5人を、神の視点で観察する。\n同じ性格でも、経験が違えば別の人生を歩む——その差異を眺める作品。"
+	ig.add_theme_font_size_override("font_size", 20)
+	ig.position = Vector2(0, 238)
+	ig.size = Vector2(W, 80)
+	ig.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	ig.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	intro.add_child(ig)
+	_apply_ui_font(ig)
+	var ih := Label.new()
+	ih.text = "● 島民をタップ → 行動・関係・「島の出来事」を観察\n● 5つの性格タイプを推理して【予測】\n● 観察したら【答え合わせ】→ 図鑑を埋める\n\n（クリアなし。あなたが見たいものを見る作品です）"
+	ih.add_theme_font_size_override("font_size", 19)
+	ih.position = Vector2(0, 348)
+	ih.size = Vector2(W, 180)
+	ih.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	intro.add_child(ih)
+	_apply_ui_font(ih)
+	var sbtn := Button.new()
+	sbtn.text = "▶ はじめる"
+	sbtn.position = Vector2(W / 2 - 110, 545)
+	sbtn.size = Vector2(220, 52)
+	sbtn.pressed.connect(_close_intro)
+	intro.add_child(sbtn)
+	_apply_ui_font(sbtn)
 	_update_ticker()
 	_refresh_log()
 
@@ -251,6 +305,10 @@ func _set_event(active: bool, pos: Vector2) -> void:
 	_event_pos = pos
 	for c in characters:
 		c.set_event(active, pos)
+
+func _close_intro() -> void:
+	if intro != null:
+		intro.visible = false
 
 func _trigger_event() -> void:
 	var p := Vector2(randf_range(120, 680), randf_range(120, 600))
@@ -380,6 +438,8 @@ func _update_dex() -> void:
 		if bool(revealed.get(c, false)):
 			s += ("◎" if bool(hit.get(c, false)) else "・") + str(true_type.get(c, "?")) + " "
 	dex_label.text = s
+	if complete_label != null:
+		complete_label.visible = (n >= characters.size())
 
 func _refresh_log() -> void:
 	if log_label == null:
